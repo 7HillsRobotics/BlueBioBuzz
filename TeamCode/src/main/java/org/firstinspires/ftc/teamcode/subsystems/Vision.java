@@ -3,6 +3,8 @@ package org.firstinspires.ftc.teamcode.subsystems;
 import android.graphics.Color;
 import android.util.Size;
 
+import androidx.annotation.Nullable;
+
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.NormalizedColorSensor;
 import com.qualcomm.robotcore.hardware.NormalizedRGBA;
@@ -10,7 +12,9 @@ import com.qualcomm.robotcore.hardware.NormalizedRGBA;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.vision.VisionPortal;
 import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
+import org.firstinspires.ftc.vision.apriltag.AprilTagPoseFtc;
 import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
+import org.firstinspires.ftc.vision.apriltag.AprilTagSingleDetection;
 import org.firstinspires.ftc.vision.opencv.ColorBlobLocatorProcessor;
 import org.firstinspires.ftc.vision.opencv.ColorRange;
 
@@ -18,25 +22,29 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Vision subsystem for AprilTag detection, finding pollen & nectar color blobs,
- * and detecting the next ball entering the shooter via color sensor.
+ * Complete Vision subsystem for the season.
+ * Mounted on the Turret camera portal:
+ * 1. AprilTag processing (range, bearing, 3D pose targeting for shooter & turret).
+ * 2. Color Blob locator processing (pollen & alliance nectar tracking).
+ * 3. Color sensor processing for incoming shooter balls (pollen vs nectar detection).
  */
 @SuppressWarnings("unused")
 public class Vision {
 
     private final VisionPortal turretPortal;
     private final AprilTagProcessor turretAprilTag;
-
-    private final VisionPortal chassisPortal;
-    private final AprilTagProcessor chassisAprilTag;
     private final ColorBlobLocatorProcessor pollenLocator;
     private final ColorBlobLocatorProcessor nectarLocatorRed;
     private final ColorBlobLocatorProcessor nectarLocatorBlue;
+
+    private final VisionPortal chassisPortal;
+    private final AprilTagProcessor chassisAprilTag;
 
     private final NormalizedColorSensor ballColorSensor;
     private Ball lastDetectedBall = Ball.NONE;
 
     public Vision(HardwareMap hw) {
+        // --- Processors Setup ---
         turretAprilTag = new AprilTagProcessor.Builder().build();
         chassisAprilTag = new AprilTagProcessor.Builder().build();
 
@@ -55,6 +63,7 @@ public class Vision {
                 .setContourMode(ColorBlobLocatorProcessor.ContourMode.EXTERNAL_ONLY)
                 .build();
 
+        // --- Hardware Lookups ---
         NormalizedColorSensor colorSensor = null;
         try {
             colorSensor = hw.get(NormalizedColorSensor.class, "ballColor");
@@ -72,19 +81,25 @@ public class Vision {
             chassisCam = hw.get(WebcamName.class, "Webcam Chassis");
         } catch (Exception ignored) {}
 
+        // Fallback to "Webcam 1" as primary turret camera if name is standard
         if (turretCam == null && chassisCam == null) {
             try {
-                chassisCam = hw.get(WebcamName.class, "Webcam 1");
+                turretCam = hw.get(WebcamName.class, "Webcam 1");
             } catch (Exception ignored) {}
         }
 
+        // --- Camera Portal Initialization ---
         if (turretCam != null && chassisCam != null) {
             int[] viewIds = VisionPortal.makeMultiPortalView(2, VisionPortal.MultiPortalLayout.HORIZONTAL);
 
+            // Turret camera gets AprilTag + Color Blob Locators
             turretPortal = new VisionPortal.Builder()
                     .setCamera(turretCam)
                     .setCameraResolution(new Size(640, 480))
                     .addProcessor(turretAprilTag)
+                    .addProcessor(pollenLocator)
+                    .addProcessor(nectarLocatorRed)
+                    .addProcessor(nectarLocatorBlue)
                     .setLiveViewContainerId(viewIds[0])
                     .build();
 
@@ -92,19 +107,21 @@ public class Vision {
                     .setCamera(chassisCam)
                     .setCameraResolution(new Size(640, 480))
                     .addProcessor(chassisAprilTag)
-                    .addProcessor(pollenLocator)
-                    .addProcessor(nectarLocatorRed)
-                    .addProcessor(nectarLocatorBlue)
                     .setLiveViewContainerId(viewIds[1])
                     .build();
         } else if (turretCam != null) {
+            // Single Turret Camera mode (Standard setup)
             turretPortal = new VisionPortal.Builder()
                     .setCamera(turretCam)
                     .setCameraResolution(new Size(640, 480))
                     .addProcessor(turretAprilTag)
+                    .addProcessor(pollenLocator)
+                    .addProcessor(nectarLocatorRed)
+                    .addProcessor(nectarLocatorBlue)
                     .build();
             chassisPortal = null;
         } else if (chassisCam != null) {
+            // Fallback Chassis Camera mode
             turretPortal = null;
             chassisPortal = new VisionPortal.Builder()
                     .setCamera(chassisCam)
@@ -120,11 +137,13 @@ public class Vision {
         }
     }
 
-    // --- Ball Sensor Detection (Next Ball for Shooter) ---
+    // ==========================================
+    // --- BALL COLOR SENSOR (Shooter Queue) ---
+    // ==========================================
 
     /**
      * Reads the color sensor mounted on the path to the shooter.
-     * Detects the next ball heading into the shooter and records its type (pollen vs nectar).
+     * Detects incoming ball type (pollen vs red/blue nectar) and updates state.
      */
     public void updateBallSensor() {
         if (ballColorSensor == null) return;
@@ -132,7 +151,6 @@ public class Vision {
         NormalizedRGBA colors = ballColorSensor.getNormalizedColors();
         float intensity = colors.red + colors.green + colors.blue;
 
-        // Trigger detection if a ball is sufficiently close
         if (intensity > 0.05f) {
             float[] hsv = new float[3];
             Color.RGBToHSV(
@@ -148,7 +166,7 @@ public class Vision {
 
             if (saturation > 0.2f && value > 0.1f) {
                 if (hue >= 35 && hue <= 90) {
-                    lastDetectedBall = Ball.POLLEN;       // Yellow ball
+                    lastDetectedBall = Ball.POLLEN;       // Yellow pollen ball
                 } else if (hue >= 180 && hue <= 250) {
                     lastDetectedBall = Ball.NECTAR_BLUE;  // Blue nectar ball
                 } else if (hue < 30 || hue > 330) {
@@ -158,23 +176,14 @@ public class Vision {
         }
     }
 
-    /**
-     * Gets the last ball detected by the color sensor heading to the shooter.
-     */
     public Ball getLastDetectedBall() {
         return lastDetectedBall;
     }
 
-    /**
-     * Alias for getLastDetectedBall(). Represents the next ball entering the shooter.
-     */
     public Ball getNextBallForShooter() {
         return lastDetectedBall;
     }
 
-    /**
-     * Gets the target shooter mode (POLLEN vs NECTAR) based on the next ball detected.
-     */
     public ShooterMode getShooterModeForNextBall() {
         if (lastDetectedBall == Ball.POLLEN) {
             return ShooterMode.POLLEN;
@@ -184,11 +193,17 @@ public class Vision {
         return ShooterMode.NONE;
     }
 
-    // --- AprilTag Detections ---
+    // ==========================================
+    // --- APRILTAG DETECTIONS & CALCULATIONS ---
+    // ==========================================
 
-    /**
-     * Gets detected AprilTags from the turret camera.
-     */
+    public static int getTagId(AprilTagDetection tag) {
+        if (tag instanceof AprilTagSingleDetection) {
+            return ((AprilTagSingleDetection) tag).id;
+        }
+        return -1;
+    }
+
     public List<AprilTagDetection> getTurretAprilTags() {
         if (turretAprilTag != null) {
             return turretAprilTag.getDetections();
@@ -196,9 +211,6 @@ public class Vision {
         return new ArrayList<>();
     }
 
-    /**
-     * Gets detected AprilTags from the chassis camera.
-     */
     public List<AprilTagDetection> getChassisAprilTags() {
         if (chassisAprilTag != null) {
             return chassisAprilTag.getDetections();
@@ -206,9 +218,6 @@ public class Vision {
         return new ArrayList<>();
     }
 
-    /**
-     * Gets all detected AprilTags across all active cameras.
-     */
     public List<AprilTagDetection> getAllAprilTags() {
         List<AprilTagDetection> tags = new ArrayList<>();
         tags.addAll(getTurretAprilTags());
@@ -216,11 +225,71 @@ public class Vision {
         return tags;
     }
 
-    // --- Pollen & Nectar Color Blob Detections ---
+    @Nullable
+    public AprilTagDetection getClosestAprilTag() {
+        List<AprilTagDetection> detections = getAllAprilTags();
+        if (detections.isEmpty()) return null;
+
+        AprilTagDetection closest = null;
+        double minDistance = Double.MAX_VALUE;
+
+        for (AprilTagDetection tag : detections) {
+            if (tag == null || tag.ftcPose == null) continue;
+            if (tag.ftcPose.range < minDistance) {
+                minDistance = tag.ftcPose.range;
+                closest = tag;
+            }
+        }
+        return closest;
+    }
+
+    @Nullable
+    public AprilTagDetection getAprilTagById(int targetId) {
+        List<AprilTagDetection> detections = getAllAprilTags();
+        for (AprilTagDetection tag : detections) {
+            if (tag != null && getTagId(tag) == targetId) {
+                return tag;
+            }
+        }
+        return null;
+    }
+
+    public double getAprilTagRangeInches() {
+        AprilTagDetection closest = getClosestAprilTag();
+        if (closest != null && closest.ftcPose != null) {
+            return closest.ftcPose.range;
+        }
+        return -1.0;
+    }
+
+    public double getAprilTagBearingDegrees() {
+        AprilTagDetection closest = getClosestAprilTag();
+        if (closest != null && closest.ftcPose != null) {
+            return closest.ftcPose.bearing;
+        }
+        return 0.0;
+    }
+
+    @Nullable
+    public AprilTagPoseFtc getClosestAprilTagPose() {
+        AprilTagDetection closest = getClosestAprilTag();
+        return (closest != null) ? closest.ftcPose : null;
+    }
 
     /**
-     * Gets detected pollen (yellow) blobs from the chassis camera.
+     * Set decimation on turret AprilTag processor to adjust speed vs resolution tradeoff.
+     * @param decimation - decimation factor (e.g. 1.0f - 3.0f)
      */
+    public void setTurretAprilTagDecimation(float decimation) {
+        if (turretAprilTag != null) {
+            turretAprilTag.setDecimation(decimation);
+        }
+    }
+
+    // ==========================================
+    // --- COLOR BLOB DETECTIONS (Pollen/Nectar) ---
+    // ==========================================
+
     public List<ColorBlobLocatorProcessor.Blob> getPollenBlobs() {
         if (pollenLocator != null) {
             return pollenLocator.getBlobs();
@@ -228,9 +297,6 @@ public class Vision {
         return new ArrayList<>();
     }
 
-    /**
-     * Gets detected red nectar blobs from the chassis camera.
-     */
     public List<ColorBlobLocatorProcessor.Blob> getRedNectarBlobs() {
         if (nectarLocatorRed != null) {
             return nectarLocatorRed.getBlobs();
@@ -238,9 +304,6 @@ public class Vision {
         return new ArrayList<>();
     }
 
-    /**
-     * Gets detected blue nectar blobs from the chassis camera.
-     */
     public List<ColorBlobLocatorProcessor.Blob> getBlueNectarBlobs() {
         if (nectarLocatorBlue != null) {
             return nectarLocatorBlue.getBlobs();
@@ -248,14 +311,35 @@ public class Vision {
         return new ArrayList<>();
     }
 
-    /**
-     * Gets detected nectar blobs for the specified alliance color.
-     */
     public List<ColorBlobLocatorProcessor.Blob> getNectarBlobs(AllianceColor alliance) {
         return (alliance == AllianceColor.RED) ? getRedNectarBlobs() : getBlueNectarBlobs();
     }
 
-    // --- Portal Status & Control ---
+    @Nullable
+    public ColorBlobLocatorProcessor.Blob getLargestBlob(List<ColorBlobLocatorProcessor.Blob> blobs) {
+        if (blobs == null || blobs.isEmpty()) return null;
+        ColorBlobLocatorProcessor.Blob largest = blobs.get(0);
+        for (ColorBlobLocatorProcessor.Blob blob : blobs) {
+            if (blob != null && blob.getContourArea() > largest.getContourArea()) {
+                largest = blob;
+            }
+        }
+        return largest;
+    }
+
+    @Nullable
+    public ColorBlobLocatorProcessor.Blob getBestPollenBlob() {
+        return getLargestBlob(getPollenBlobs());
+    }
+
+    @Nullable
+    public ColorBlobLocatorProcessor.Blob getBestNectarBlob(AllianceColor alliance) {
+        return getLargestBlob(getNectarBlobs(alliance));
+    }
+
+    // ==========================================
+    // --- PORTAL & STREAMING CONTROLS ---
+    // ==========================================
 
     public boolean isTurretCameraReady() {
         return turretPortal != null && turretPortal.getCameraState() == VisionPortal.CameraState.STREAMING;
@@ -265,29 +349,38 @@ public class Vision {
         return chassisPortal != null && chassisPortal.getCameraState() == VisionPortal.CameraState.STREAMING;
     }
 
-    public void setTurretCamAprilTagEnabled(boolean enabled) {
+    public void setTurretAprilTagEnabled(boolean enabled) {
         if (turretPortal != null && turretAprilTag != null) {
             turretPortal.setProcessorEnabled(turretAprilTag, enabled);
         }
     }
 
-    public void setChassisCamAprilTagEnabled(boolean enabled) {
-        if (chassisPortal != null && chassisAprilTag != null) {
-            chassisPortal.setProcessorEnabled(chassisAprilTag, enabled);
-        }
-    }
-
     public void setPollenLocatorEnabled(boolean enabled) {
-        if (chassisPortal != null && pollenLocator != null) {
+        if (turretPortal != null && pollenLocator != null) {
+            turretPortal.setProcessorEnabled(pollenLocator, enabled);
+        } else if (chassisPortal != null && pollenLocator != null) {
             chassisPortal.setProcessorEnabled(pollenLocator, enabled);
         }
     }
 
     public void setNectarLocatorEnabled(boolean enabled) {
-        if (chassisPortal != null) {
+        if (turretPortal != null) {
+            if (nectarLocatorRed != null) turretPortal.setProcessorEnabled(nectarLocatorRed, enabled);
+            if (nectarLocatorBlue != null) turretPortal.setProcessorEnabled(nectarLocatorBlue, enabled);
+        } else if (chassisPortal != null) {
             if (nectarLocatorRed != null) chassisPortal.setProcessorEnabled(nectarLocatorRed, enabled);
             if (nectarLocatorBlue != null) chassisPortal.setProcessorEnabled(nectarLocatorBlue, enabled);
         }
+    }
+
+    public void stopStreaming() {
+        if (turretPortal != null) turretPortal.stopStreaming();
+        if (chassisPortal != null) chassisPortal.stopStreaming();
+    }
+
+    public void resumeStreaming() {
+        if (turretPortal != null) turretPortal.resumeStreaming();
+        if (chassisPortal != null) chassisPortal.resumeStreaming();
     }
 
     public void close() {
@@ -295,7 +388,9 @@ public class Vision {
         if (chassisPortal != null) chassisPortal.close();
     }
 
-    // --- Auxiliary Types & Stubs ---
+    // ==========================================
+    // --- AUXILIARY TYPES & STUBS ---
+    // ==========================================
 
     public enum ShooterMode { NONE, POLLEN, NECTAR }
     public enum CameraSource { TURRET_CAM, CHASSIS_CAM }
@@ -326,6 +421,12 @@ public class Vision {
     }
 
     public ScoringTargetStatus getScorableTarget(AllianceColor alliance) {
+        AprilTagDetection closest = getClosestAprilTag();
+        if (closest != null && closest.ftcPose != null) {
+            TargetSolution sol = new TargetSolution(CameraSource.TURRET_CAM, "AprilTag_" + getTagId(closest),
+                    closest.ftcPose.bearing, closest.ftcPose.range);
+            return new ScoringTargetStatus(true, sol);
+        }
         return new ScoringTargetStatus(false, null);
     }
 

@@ -1,94 +1,149 @@
 package org.firstinspires.ftc.teamcode.subsystems;
 
-import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 /**
- * Class to control intake functionality: the intake roller, the windmill
- * that indexes balls inside the robot, and the feeder that sends a ball
- * up to the turret/shooter.
+ * Subsystem to control the intake mechanisms:
+ * 1. Front rollers to draw/suck balls into the robot.
+ * 2. Surgical tubing mechanism (might use rollers instead) to transport and feed balls up to the shooter.
  */
+@SuppressWarnings("unused")
 public class Intake {
 
-    // declare hardware here
-    private final DcMotorEx motor;
-    private final CRServo windmill;
-    private final DcMotorEx feeder;
+    private final DcMotorEx rollerMotor;
+    private final DcMotorEx tubingMotor;
+
+    public static double DEFAULT_ROLLER_POWER = 0.8;
+    public static double DEFAULT_TUBING_POWER = 0.8;
 
     public Intake(HardwareMap hw) {
-        // initialize hardware here
-        motor = hw.get(DcMotorEx.class, "intake");
-        windmill = hw.get(CRServo.class, "windmill");
-        feeder = hw.get(DcMotorEx.class, "feeder");
+        DcMotorEx tempRoller = null;
+        try {
+            tempRoller = hw.get(DcMotorEx.class, "intake");
+        } catch (Exception e1) {
+            try {
+                tempRoller = hw.get(DcMotorEx.class, "rollers");
+            } catch (Exception ignored) {}
+        }
+        this.rollerMotor = tempRoller;
+
+        DcMotorEx tempTubing = null;
+        try {
+            tempTubing = hw.get(DcMotorEx.class, "tubing");
+        } catch (Exception e1) {
+            try {
+                tempTubing = hw.get(DcMotorEx.class, "feeder");
+            } catch (Exception ignored) {}
+        }
+        this.tubingMotor = tempTubing;
     }
 
     /**
-     * Set the power of the intake roller
-     * @param power - power to set
+     * Start intaking balls: runs front rollers and surgical tubing in forward direction.
      */
-    public void setPower(double power) {
-        motor.setPower(power);
+    public void intakeBalls() {
+        // TODO: Run intake mechanisms to draw balls into the robot.
+        // Suggestion: I would set both front rollers and surgical tubing motors to forward power.
     }
 
     /**
-     * Turn the intake roller on
+     * Turn front intake rollers ON.
      */
     public void intakeOn() {
-        setPower(0.8);
+        // TODO: Turn on front intake rollers.
+        // Suggestion: I would set the front roller motor power to DEFAULT_ROLLER_POWER.
     }
 
     /**
-     * Turn the intake roller off
+     * Turn front intake rollers OFF.
      */
     public void intakeOff() {
-        setPower(0);
+        setRollerPower(0.0);
     }
 
     /**
-     * Set the power of the internal windmill indexer
-     * @param power - power to set
+     * Feed balls up to the shooter via surgical tubing.
      */
-    public void setWindmillPower(double power) {
-        windmill.setPower(power);
+    public void feedToShooter() {
+        // TODO: Transport balls up to the shooter.
+        // Suggestion: I would set the surgical tubing feeder motor power to DEFAULT_TUBING_POWER.
     }
 
     /**
-     * Index the windmill to the next ball position
+     * Stop surgical tubing feeder.
      */
-    public void indexWindmill() {
-        setWindmillPower(0.5);
-    }
-
-    public void windmillOff() {
-        setWindmillPower(0);
+    public void tubingOff() {
+        setTubingPower(0.0);
     }
 
     /**
-     * Set the power of the feeder that sends a ball to the turret
-     * @param power - power to set
+     * Reverses front rollers and surgical tubing to eject/outtake balls.
      */
+    public void outtake() {
+        // TODO: Eject balls from intake.
+        // Suggestion: I would set negative power on both front rollers and surgical tubing motors to reverse direction.
+    }
+
+    /**
+     * Set power of front intake rollers.
+     * @param power - power level (-1.0 to 1.0)
+     */
+    public void setRollerPower(double power) {
+        // TODO: Apply power to front intake rollers.
+        // Suggestion: I would check if rollerMotor != null and call rollerMotor.setPower(power).
+        if (rollerMotor != null) {
+            rollerMotor.setPower(power);
+        }
+    }
+
+    /**
+     * Set power of surgical tubing mechanism.
+     * @param power - power level (-1.0 to 1.0)
+     */
+    public void setTubingPower(double power) {
+        // TODO: Apply power to surgical tubing feeder.
+        // Suggestion: I would check if tubingMotor != null and call tubingMotor.setPower(power).
+        if (tubingMotor != null) {
+            tubingMotor.setPower(power);
+        }
+    }
+
+    // --- Legacy / Compatibility Methods ---
+
+    public void setPower(double power) {
+        setRollerPower(power);
+    }
+
     public void setFeederPower(double power) {
-        feeder.setPower(power);
+        setTubingPower(power);
     }
 
-    /**
-     * Feed a ball up to the turret/shooter
-     */
     public void feedToTurret() {
-        setFeederPower(0.8);
+        feedToShooter();
     }
 
     public void feederOff() {
-        setFeederPower(0);
+        tubingOff();
+    }
+
+    public void indexWindmill() {
+        setTubingPower(0.5);
+    }
+
+    public void windmillOff() {
+        tubingOff();
+    }
+
+    public void setWindmillPower(double power) {
+        setTubingPower(power);
     }
 
     /**
-     * Safety stop function
+     * Safety stop function for all intake hardware.
      */
     public void stop() {
-        setPower(0);
-        setWindmillPower(0);
-        setFeederPower(0);
+        setRollerPower(0.0);
+        setTubingPower(0.0);
     }
 }

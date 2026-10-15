@@ -4,6 +4,7 @@ import androidx.annotation.NonNull;
 
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
+import com.acmerobotics.roadrunner.Pose2d;
 
 import org.firstinspires.ftc.teamcode.Robot;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
@@ -16,7 +17,8 @@ import java.util.List;
 
 /**
  * High-level sequences for collecting and scoring game elements.
- * Integrates Vision blob detection and DrivingSequences for element collection and scoring.
+ * Integrates Vision blob detection, Shooter speed calculation based on bot position/vision,
+ * Turret AprilTag tracking, and Intake front rollers/surgical tubing transport.
  */
 @SuppressWarnings("unused")
 public class ScoringSequences {
@@ -67,13 +69,13 @@ public class ScoringSequences {
     }
 
     /**
-     * Collects pollen (yellow game element) using vision tracking and driving/intake.
+     * Collects pollen (yellow game element) using front intake rollers and vision tracking.
      * @return true if a pollen blob was detected and tracked, false otherwise.
      */
     public boolean collectPollen() {
         if (intake != null) {
             intake.intakeOn();
-            intake.indexWindmill();
+            intake.feedToShooter();
         }
 
         if (vision != null && robot != null && robot.drivetrain != null) {
@@ -105,14 +107,14 @@ public class ScoringSequences {
     }
 
     /**
-     * Collects nectar (red or blue game element based on alliance) using vision tracking and driving/intake.
+     * Collects nectar (red or blue game element based on alliance) using intake rollers and vision.
      * @param alliance Current alliance color
      * @return true if a nectar blob was detected and tracked, false otherwise.
      */
     public boolean collectNectar(Vision.AllianceColor alliance) {
         if (intake != null) {
             intake.intakeOn();
-            intake.indexWindmill();
+            intake.feedToShooter();
         }
 
         if (vision != null && robot != null && robot.drivetrain != null) {
@@ -145,7 +147,34 @@ public class ScoringSequences {
     }
 
     /**
-     * Prepares the shooter and hood for scoring.
+     * Automatically calculates the ideal flywheel speed based on the robot's current position
+     * (or vision AprilTag range) and spins up the shooter.
+     *
+     * @return calculated target RPM
+     */
+    public double prepShooterAuto() {
+        if (shooter == null) return 0.0;
+
+        double calculatedRpm;
+        if (robot != null && robot.drivetrain != null) {
+            Pose2d currentPose = robot.drivetrain.getPose();
+            calculatedRpm = shooter.setTargetRpmFromPosition(currentPose);
+        } else if (vision != null) {
+            calculatedRpm = shooter.setTargetRpmFromVision(vision);
+        } else {
+            calculatedRpm = 3000.0;
+            shooter.setTargetRpm(calculatedRpm);
+        }
+
+        shooter.setSpinning(true);
+        if (vision != null) {
+            shooter.setHoodFromVision(vision);
+        }
+        return calculatedRpm;
+    }
+
+    /**
+     * Prepares the shooter and hood for scoring with a manually specified RPM.
      *
      * @param targetRpm Target flywheel RPM
      */
@@ -168,27 +197,25 @@ public class ScoringSequences {
         if (turret != null) {
             turret.setEnabled(true);
             if (vision != null) {
-                turret.update(vision);
+                turret.pointToAprilTag(vision);
             }
         }
     }
 
     /**
-     * Feeds a ball into the shooter mechanism.
+     * Feeds a ball into the shooter using the surgical tubing mechanism.
      */
     public void feedBall() {
         if (intake != null) {
-            intake.feedToTurret();
-            intake.indexWindmill();
+            intake.feedToShooter();
         }
     }
 
     /**
-     * Runs the full collection and scoring sequence sequentially.
+     * Runs the full collection, auto-speed calculation, aiming, and scoring sequence.
      */
     public void runScoringSequence() {
-        collectPollen();
-        prepShooter(3000.0);
+        prepShooterAuto();
         aimTurret(Vision.AllianceColor.RED);
         feedBall();
     }
@@ -206,7 +233,7 @@ public class ScoringSequences {
     // --- Road Runner Actions ---
 
     /**
-     * Action to collect pollen using vision-based driving and intake.
+     * Action to collect pollen using vision-based driving and intake rollers.
      */
     public Action getCollectPollenAction() {
         return new Action() {
@@ -231,7 +258,7 @@ public class ScoringSequences {
     }
 
     /**
-     * Action to collect nectar using vision-based driving and intake.
+     * Action to collect nectar using vision-based driving and intake rollers.
      */
     public Action getCollectNectarAction(Vision.AllianceColor alliance) {
         return new Action() {
@@ -256,7 +283,33 @@ public class ScoringSequences {
     }
 
     /**
-     * Action for spinning up the shooter.
+     * Action for spinning up the shooter to optimal calculated RPM based on position/vision.
+     */
+    public Action getPrepShooterAutoAction() {
+        return new Action() {
+            private boolean initialized = false;
+
+            @Override
+            public boolean run(@NonNull TelemetryPacket packet) {
+                if (!initialized) {
+                    double rpm = prepShooterAuto();
+                    packet.put("ScoringSequence", "Calculated Optimal RPM: " + String.format("%.0f", rpm));
+                    initialized = true;
+                }
+
+                if (shooter != null) {
+                    shooter.update();
+                    packet.put("Shooter Target RPM", shooter.getTargetRpm());
+                    packet.put("Shooter Actual RPM", shooter.getRpm());
+                    return !shooter.isAtSpeed();
+                }
+                return false;
+            }
+        };
+    }
+
+    /**
+     * Action for spinning up the shooter to a target RPM.
      */
     public Action getPrepShooterAction(double targetRpm) {
         return new Action() {
@@ -269,19 +322,24 @@ public class ScoringSequences {
                     prepShooter(targetRpm);
                     initialized = true;
                 }
-                return shooter != null && !shooter.isAtSpeed();
+
+                if (shooter != null) {
+                    shooter.update();
+                    return !shooter.isAtSpeed();
+                }
+                return false;
             }
         };
     }
 
     /**
-     * Action for aiming the turret.
+     * Action for aiming the turret toward AprilTags.
      */
     public Action getAimTurretAction(Vision.AllianceColor alliance) {
         return new Action() {
             @Override
             public boolean run(@NonNull TelemetryPacket packet) {
-                packet.put("ScoringSequence", "Aiming turret");
+                packet.put("ScoringSequence", "Aiming turret at AprilTags");
                 aimTurret(alliance);
                 return turret != null && !turret.isOnTarget();
             }
@@ -289,7 +347,7 @@ public class ScoringSequences {
     }
 
     /**
-     * Action for feeding a ball to score.
+     * Action for feeding a ball into the shooter via surgical tubing.
      */
     public Action getFeedBallAction() {
         return new Action() {
@@ -301,9 +359,9 @@ public class ScoringSequences {
                     startTime = System.currentTimeMillis();
                     feedBall();
                 }
-                packet.put("ScoringSequence", "Feeding ball");
-                if (System.currentTimeMillis() - startTime > 500) {
-                    if (intake != null) intake.feederOff();
+                packet.put("ScoringSequence", "Feeding ball via surgical tubing");
+                if (System.currentTimeMillis() - startTime > 600) {
+                    if (intake != null) intake.tubingOff();
                     return false;
                 }
                 return true;
@@ -312,7 +370,7 @@ public class ScoringSequences {
     }
 
     /**
-     * Action for full collection, aiming, and scoring sequence.
+     * Action for full aiming, shooter spinup to perfect RPM, and feeding sequence.
      */
     public Action getCollectAndScoreAction(Vision.AllianceColor alliance) {
         return new Action() {
@@ -325,41 +383,29 @@ public class ScoringSequences {
 
                 switch (step) {
                     case 0:
-                        packet.put("ScoringSequence", "Step 0: Collecting game element (Vision & Drive)");
-                        collectPollen();
+                        packet.put("ScoringSequence", "Step 0: Calculating perfect RPM & Aiming turret...");
+                        prepShooterAuto();
+                        aimTurret(alliance);
                         stepStartTime = now;
                         step = 1;
                         break;
                     case 1:
-                        packet.put("ScoringSequence", "Step 1: Intaking element...");
-                        if (now - stepStartTime > 1500) {
-                            if (robot != null && robot.drivetrain != null) robot.drivetrain.stop();
-                            if (intake != null) intake.intakeOff();
+                        if (shooter != null) shooter.update();
+                        if (turret != null) turret.pointToAprilTag(vision);
+
+                        packet.put("ScoringSequence", "Step 1: Waiting for flywheel & turret alignment...");
+                        boolean shooterReady = (shooter == null) || shooter.isAtSpeed();
+                        boolean turretReady = (turret == null) || turret.isOnTarget();
+
+                        if ((shooterReady && turretReady) || (now - stepStartTime > 2000)) {
                             step = 2;
                             stepStartTime = now;
-                        } else {
-                            collectPollen();
                         }
                         break;
                     case 2:
-                        packet.put("ScoringSequence", "Step 2: Prepping shooter & mode...");
-                        if (shooter != null) shooter.setHoodFromVision(vision);
-                        prepShooter(3000.0);
-                        step = 3;
-                        stepStartTime = now;
-                        break;
-                    case 3:
-                        packet.put("ScoringSequence", "Step 3: Aiming turret at AprilTags...");
-                        aimTurret(alliance);
-                        if (now - stepStartTime > 500) {
-                            step = 4;
-                            stepStartTime = now;
-                        }
-                        break;
-                    case 4:
-                        packet.put("ScoringSequence", "Step 4: Feeding ball & scoring...");
+                        packet.put("ScoringSequence", "Step 2: Feeding ball via surgical tubing into shooter...");
                         feedBall();
-                        if (now - stepStartTime > 500) {
+                        if (now - stepStartTime > 600) {
                             stopScoring();
                             return false; // Action complete
                         }

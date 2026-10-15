@@ -7,12 +7,11 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.util.Range;
 
 import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
-import org.firstinspires.ftc.vision.apriltag.AprilTagSingleDetection;
 
 import java.util.List;
 
 /**
- * Class to control turret aiming toward AprilTags using a continuously rotating servo.
+ * Subsystem to control turret aiming directly at AprilTags using a continuous rotation servo.
  */
 @SuppressWarnings("unused")
 public class Turret {
@@ -23,7 +22,7 @@ public class Turret {
     private boolean tracking = false;
     private boolean onTarget = false;
     private double lastTurnErrorDeg = 0.0;
-    private int targetTagId = -1; // -1 means track any visible/closest tag
+    private int targetTagId = -1; // -1 means track any visible / closest tag
 
     public static double KP = 0.025;
     public static double MIN_POWER = 0.08;
@@ -46,7 +45,7 @@ public class Turret {
         if (!e) {
             tracking = false;
             onTarget = false;
-            servo.setPower(0);
+            if (servo != null) servo.setPower(0);
         }
     }
 
@@ -74,11 +73,21 @@ public class Turret {
      * Inverts the servo rotation direction if mounted backwards.
      */
     public void setInverted(boolean inverted) {
-        servo.setDirection(inverted ? CRServo.Direction.REVERSE : CRServo.Direction.FORWARD);
+        if (servo != null) {
+            servo.setDirection(inverted ? CRServo.Direction.REVERSE : CRServo.Direction.FORWARD);
+        }
     }
 
     /**
-     * Continuously aims the turret toward detected AprilTags in Vision.
+     * Direct method to point turret toward AprilTags using Vision.
+     * @param vision - Vision subsystem
+     */
+    public void pointToAprilTag(Vision vision) {
+        update(vision);
+    }
+
+    /**
+     * Continuously aims the turret toward detected AprilTags from Vision.
      * @param vision - Vision subsystem
      */
     public void update(Vision vision) {
@@ -101,70 +110,29 @@ public class Turret {
         if (!enabled || detections == null || detections.isEmpty()) {
             tracking = false;
             onTarget = false;
-            servo.setPower(0);
+            if (servo != null) servo.setPower(0);
             return;
         }
 
+        // TODO: Continuously aim turret toward detected AprilTags.
+        // Suggestion: I would get the best AprilTag detection matching targetTagId, calculate the bearing
+        // error (degrees) to the tag, and apply proportional power (error * KP + MIN_POWER) to rotate
+        // the servo until the error is within TARGET_THRESHOLD_DEG.
         AprilTagDetection bestTag = getAprilTagDetection(detections);
 
         if (bestTag == null) {
             tracking = false;
             onTarget = false;
-            servo.setPower(0);
-            return;
-        }
-
-        // Calculate bearing error to the target tag in degrees
-        double errorDeg = 0.0;
-        if (bestTag.ftcPose != null) {
-            errorDeg = bestTag.ftcPose.bearing;
-        } else if (bestTag instanceof AprilTagSingleDetection) {
-            AprilTagSingleDetection singleDet = (AprilTagSingleDetection) bestTag;
-            if (singleDet.center != null) {
-                errorDeg = (singleDet.center.x - 320.0) / 10.0;
-            }
-        }
-
-        lastTurnErrorDeg = errorDeg;
-        tracking = true;
-
-        if (Math.abs(errorDeg) <= TARGET_THRESHOLD_DEG) {
-            onTarget = true;
-            servo.setPower(0);
-        } else {
-            onTarget = false;
-            double pPower = errorDeg * KP;
-            double power = Math.signum(pPower) * (MIN_POWER + Math.abs(pPower));
-            power = Range.clip(power, -1.0, 1.0);
-            servo.setPower(power);
+            if (servo != null) servo.setPower(0);
         }
     }
 
     @Nullable
     private AprilTagDetection getAprilTagDetection(List<AprilTagDetection> detections) {
-        AprilTagDetection bestTag = null;
-        double minDistance = Double.MAX_VALUE;
-
-        for (AprilTagDetection detection : detections) {
-            if (detection == null) continue;
-
-            // Filter by specific tag ID if set
-            if (targetTagId != -1) {
-                if (detection instanceof AprilTagSingleDetection) {
-                    AprilTagSingleDetection singleDet = (AprilTagSingleDetection) detection;
-                    if (singleDet.id != targetTagId) continue;
-                } else {
-                    continue;
-                }
-            }
-
-            double dist = (detection.ftcPose != null) ? detection.ftcPose.range : 100.0;
-            if (dist < minDistance) {
-                minDistance = dist;
-                bestTag = detection;
-            }
-        }
-        return bestTag;
+        // TODO: Find the primary AprilTag detection.
+        // Suggestion: I would iterate through detections, filter out any that don't match targetTagId (when set),
+        // and return the detection with the smallest range/distance.
+        return null;
     }
 
     /**
@@ -175,7 +143,7 @@ public class Turret {
         if (!enabled || status == null || !status.found) {
             tracking = false;
             onTarget = false;
-            servo.setPower(0);
+            if (servo != null) servo.setPower(0);
             return;
         }
 
@@ -185,13 +153,13 @@ public class Turret {
 
         if (Math.abs(errorDeg) <= TARGET_THRESHOLD_DEG) {
             onTarget = true;
-            servo.setPower(0);
+            if (servo != null) servo.setPower(0);
         } else {
             onTarget = false;
             double pPower = errorDeg * KP;
             double power = Math.signum(pPower) * (MIN_POWER + Math.abs(pPower));
             power = Range.clip(power, -1.0, 1.0);
-            servo.setPower(power);
+            if (servo != null) servo.setPower(power);
         }
     }
 
@@ -202,7 +170,9 @@ public class Turret {
     public void manualNudge(double power) {
         tracking = false;
         onTarget = false;
-        servo.setPower(Range.clip(power, -1.0, 1.0));
+        if (servo != null) {
+            servo.setPower(Range.clip(power, -1.0, 1.0));
+        }
     }
 
     /**
@@ -211,6 +181,8 @@ public class Turret {
     public void stop() {
         tracking = false;
         onTarget = false;
-        servo.setPower(0);
+        if (servo != null) {
+            servo.setPower(0);
+        }
     }
 }
